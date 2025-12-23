@@ -2,51 +2,63 @@
 <html lang="sk">
 <head>
 <meta charset="UTF-8">
-<title>Taxi kalkulačka PWA</title>
+<title>Taxi Taxameter PRO</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<!-- Inline manifest -->
-<link rel="manifest" href='data:application/json,{"name":"Taxi Kalkulačka","short_name":"Taxi","start_url":"./","display":"standalone","background_color":"#ffffff","theme_color":"#007bff","icons":[{"src":"https://maps.google.com/mapfiles/ms/icons/taxi.png","sizes":"192x192","type":"image/png"},{"src":"https://maps.google.com/mapfiles/ms/icons/taxi.png","sizes":"180x180","type":"image/png"}]}'>
-
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Taxi Kalkulačka">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
-<link rel="apple-touch-icon" href="https://maps.google.com/mapfiles/ms/icons/taxi.png">
-
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
 <style>
-body { font-family: Arial; background:#f2f2f2; margin:0; padding:15px; }
-.container { max-width:500px; margin:auto; background:#fff; padding:15px; border-radius:10px; }
-h2 { text-align:center; margin-bottom:10px; }
-button { width:100%; padding:15px; font-size:18px; margin-top:8px; border:none; border-radius:8px; color:white; }
-button.gps { background:#007bff; }
-button.secondary { background:#28a745; }
-button.alt { background:#6c757d; }
-input { width:100%; padding:12px; font-size:16px; margin-top:5px; margin-bottom:5px; }
-.status { font-size:14px; margin-top:5px; }
-.result { margin-top:15px; font-size:18px; background:#e9ecef; padding:10px; border-radius:8px; }
+body { font-family: Arial; background:#f2f2f2; padding:15px; }
+.container { max-width:520px; margin:auto; background:#fff; padding:15px; border-radius:12px; }
+h2,h3 { text-align:center; }
+input,button { width:100%; padding:12px; margin-top:6px; font-size:16px; }
+button { border:none; border-radius:8px; color:#fff; }
+.gps { background:#007bff; }
+.calc { background:#28a745; }
+.alt { background:#6c757d; }
+.result { margin-top:15px; padding:12px; background:#e9ecef; border-radius:8px; font-size:16px; }
+.green { color:green; font-weight:bold; }
+.red { color:red; font-weight:bold; }
 #map { height:300px; margin-top:10px; border-radius:8px; }
+
+.autocomplete { position:relative; }
+.suggestions {
+  position:absolute; background:#fff; border:1px solid #ccc;
+  width:100%; z-index:1000; max-height:150px; overflow:auto;
+}
+.suggestions div { padding:6px; cursor:pointer; }
+.suggestions div:hover { background:#eee; }
 </style>
 </head>
+
 <body>
 <div class="container">
-<h2>🚕 Taxi kalkulačka PWA</h2>
+<h2>🚖 Taxi Taxameter PRO</h2>
 
-<button class="gps" onclick="getLocation()">📍 Zisti polohu vozidla (GPS)</button>
-<div class="status" id="locationStatus">Poloha vozidla nezistená</div>
-<input id="manualVehicle" placeholder="Ručná adresa vozidla (ak GPS zlyhá)">
-<button class="alt" onclick="setManualLocation()">✍️ Použiť ručne zadanú polohu</button>
+<button class="gps" onclick="getLocation()">📍 GPS poloha vodiča</button>
+<input id="manualVehicle" placeholder="Ručná adresa vodiča">
+<button class="alt" onclick="setManualLocation()">Použiť ručne</button>
 
+<div class="autocomplete">
 <input id="pickup" placeholder="Adresa nástupu klienta">
-<button onclick="startVoice('pickup')">🎤 Nadiktovať adresu nástupu</button>
+<div id="pickSug" class="suggestions"></div>
+</div>
 
-<input id="dropoff" placeholder="Adresa výstupu klienta">
-<button onclick="startVoice('dropoff')">🎤 Nadiktovať adresu výstupu</button>
+<div class="autocomplete">
+<input id="dropoff" placeholder="Adresa cieľa klienta">
+<div id="dropSug" class="suggestions"></div>
+</div>
 
-<input id="ridePrice" placeholder="Cena jazdy podľa cenníka (€)" type="number" step="0.01">
-<div class="status" id="commissionStatus">Provízia dispečingu: 0 €</div>
+<h3>Sadzby</h3>
+<input id="ratePickup" type="number" step="0.01" value="0.40" placeholder="Sadzba pristavenie €/km">
+<input id="rateKm" type="number" step="0.01" value="0.85" placeholder="Sadzba za 1 km jazdy">
+<input id="costKm" type="number" step="0.01" value="0.31" placeholder="Náklady trasy €/km">
+<input id="extras" type="number" step="0.01" value="0" placeholder="Príplatky €">
 
-<button class="secondary" onclick="calculate()">🧮 Vypočítať cenu a trasu</button>
+<h3>Cena jazdy</h3>
+<input id="ridePrice" type="number" step="0.01" placeholder="Cena jazdy €">
+
+<button class="calc" onclick="calculate()">🧮 Vypočítať</button>
 
 <div id="map"></div>
 <div class="result" id="output"></div>
@@ -54,116 +66,100 @@ input { width:100%; padding:12px; font-size:16px; margin-top:5px; margin-bottom:
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const PRICE_PER_KM = 0.31;
-const MIN_PRICE = 3.00;
-let vehicleLat, vehicleLng;
-let map, routeLayer;
-let markers = {};
+let vehicle,map,routeLayer;
+let vLat,vLng;
 
-// GPS poloha vozidla
-function getLocation() {
-  navigator.geolocation.getCurrentPosition(pos=>{
-    setVehiclePosition(pos.coords.latitude,pos.coords.longitude,"Poloha vozidla (GPS)");
-  },()=>alert("Nepodarilo sa získať GPS"));
+function getLocation(){
+ navigator.geolocation.getCurrentPosition(p=>{
+  setVehicle(p.coords.latitude,p.coords.longitude);
+ });
 }
 
-// Ručné zadanie polohy
 async function setManualLocation(){
-  const addr=document.getElementById("manualVehicle").value;
-  if(!addr) return alert("Zadaj ručnú adresu vozidla");
-  const geo=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${addr}`);
-  const data=await geo.json();
-  if(!data[0]) return alert("Adresa vozidla nenájdená");
-  setVehiclePosition(data[0].lat,data[0].lon,"Ručná poloha vozidla");
+ const a=document.getElementById("manualVehicle").value;
+ const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${a}`);
+ const d=await r.json();
+ setVehicle(d[0].lat,d[0].lon);
 }
 
-// Nastavenie vozidla na mape
-function setVehiclePosition(lat,lng,label){
-  vehicleLat=lat; vehicleLng=lng;
-  document.getElementById("locationStatus").innerText=label;
-  if(!map){
-    map=L.map('map').setView([lat,lng],13);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-  }
-  if(markers.vehicle) map.removeLayer(markers.vehicle);
-  markers.vehicle=L.marker([lat,lng],{icon:L.icon({iconUrl:'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',iconSize:[32,32]})}).addTo(map).bindPopup(label).openPopup();
+function setVehicle(lat,lng){
+ vLat=lat; vLng=lng;
+ if(!map){
+  map=L.map('map').setView([lat,lng],13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+ }
+ if(vehicle) map.removeLayer(vehicle);
+ vehicle=L.marker([lat,lng]).addTo(map);
 }
 
-// Hlasové zadanie adresy
-function startVoice(field){
-  const rec=new webkitSpeechRecognition();
-  rec.lang="sk-SK";
-  rec.start();
-  rec.onresult=e=>{
-    document.getElementById(field).value=e.results[0][0].transcript;
-  };
+function setupAuto(id,sug){
+ let t;
+ document.getElementById(id).addEventListener("keyup",()=>{
+  clearTimeout(t);
+  t=setTimeout(async()=>{
+   const q=document.getElementById(id).value;
+   if(q.length<3) return;
+   const r=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${q}&limit=5`);
+   const d=await r.json();
+   const s=document.getElementById(sug);
+   s.innerHTML="";
+   d.forEach(i=>{
+    const div=document.createElement("div");
+    div.innerText=i.display_name;
+    div.onclick=()=>{ document.getElementById(id).value=i.display_name; s.innerHTML=""; }
+    s.appendChild(div);
+   });
+  },300);
+ });
 }
+setupAuto("pickup","pickSug");
+setupAuto("dropoff","dropSug");
 
-// Výpočet trasy, ceny a provízie
 async function calculate(){
-  if(!vehicleLat) return alert("Najprv nastav polohu vozidla");
-  const pickupAddr=document.getElementById("pickup").value;
-  const dropAddr=document.getElementById("dropoff").value;
-  if(!pickupAddr || !dropAddr) return alert("Zadaj adresu nástupu a výstupu");
+ const pAddr=pickup.value, dAddr=dropoff.value;
+ const pG=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${pAddr}`);
+ const dG=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${dAddr}`);
+ const p=(await pG.json())[0], d=(await dG.json())[0];
 
-  const pickupGeo=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${pickupAddr}`);
-  const pickupData=await pickupGeo.json();
-  if(!pickupData[0]) return alert("Adresa nástupu nenájdená");
-  const pickupLat=pickupData[0].lat;
-  const pickupLng=pickupData[0].lon;
+ const route=await fetch(`https://router.project-osrm.org/route/v1/driving/${vLng},${vLat};${p.lon},${p.lat};${d.lon},${d.lat}?overview=full&geometries=geojson`);
+ const data=await route.json();
 
-  const dropGeo=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${dropAddr}`);
-  const dropData=await dropGeo.json();
-  if(!dropData[0]) return alert("Adresa výstupu nenájdená");
-  const dropLat=dropData[0].lat;
-  const dropLng=dropData[0].lon;
+ const kmPickup=data.routes[0].legs[0].distance/1000;
+ const kmRide=data.routes[0].legs[1].distance/1000;
+ const totalKm=kmPickup+kmRide;
 
-  // Markery
-  if(markers.pickup) map.removeLayer(markers.pickup);
-  if(markers.dropoff) map.removeLayer(markers.dropoff);
-  markers.pickup=L.marker([pickupLat,pickupLng],{icon:L.icon({iconUrl:'https://maps.google.com/mapfiles/ms/icons/green-dot.png',iconSize:[32,32]})}).addTo(map).bindPopup("Miesto nástupu").openPopup();
-  markers.dropoff=L.marker([dropLat,dropLng],{icon:L.icon({iconUrl:'https://maps.google.com/mapfiles/ms/icons/red-dot.png',iconSize:[32,32]})}).addTo(map).bindPopup("Miesto výstupu").openPopup();
+ const rateP=+ratePickup.value;
+ const rateK=+rateKm.value;
+ const costKmVal=+costKm.value;
+ const extrasVal=+extras.value;
+ const ridePrice=+ridePrice.value;
 
-  // Route
-  const route=await fetch(`https://router.project-osrm.org/route/v1/driving/${vehicleLng},${vehicleLat};${pickupLng},${pickupLat};${dropLng},${dropLat}?overview=full&geometries=geojson`);
-  const routeData=await route.json();
-  const distanceKm=routeData.routes[0].distance/1000;
-  const durationMin=routeData.routes[0].duration/60;
-  const price=Math.max(distanceKm*PRICE_PER_KM,MIN_PRICE).toFixed(2);
+ const calcPrice=(kmPickup*rateP + kmRide*rateK + extrasVal);
+ const costs=(totalKm*costKmVal);
 
-  const ridePrice=parseFloat(document.getElementById("ridePrice").value)||0;
-  const commission=ridePrice*0.25 + ridePrice*0.23;
-  document.getElementById("commissionStatus").innerHTML=`Provízia dispečingu: <b>${commission.toFixed(2)} €</b>`;
+ const commission=ridePrice*0.25;
+ const vat=commission*0.23;
+ const dispatchCosts=commission+vat;
 
-  const totalPrice=parseFloat(price)+commission;
-  let totalColor = totalPrice>ridePrice ? 'red':'green';
+ const finalCosts=costs+dispatchCosts;
+ const cls = ridePrice>=finalCosts ? "green" : "red";
 
-  document.getElementById("output").innerHTML=`
-    📏 Vzdialenosť: ${distanceKm.toFixed(2)} km<br>
-    ⏱️ Čas: ${durationMin.toFixed(0)} min<br>
-    💶 Náklady z trasy: <b>${price} €</b><br>
-    💵 Cena jazdy podľa cenníka: <b>${ridePrice.toFixed(2)} €</b><br>
-    🏢 Provízia dispečingu (25% + DPH): <b>${commission.toFixed(2)} €</b><br>
-    🔹 Celková suma (náklady + provízia): <b style="color:${totalColor};">${totalPrice.toFixed(2)} €</b>
-  `;
+ output.innerHTML=`
+📏 Km pristavenie: ${kmPickup.toFixed(2)}<br>
+📏 Km jazda: ${kmRide.toFixed(2)}<br><br>
 
-  if(routeLayer) map.removeLayer(routeLayer);
-  routeLayer=L.geoJSON(routeData.routes[0].geometry).addTo(map);
-  map.fitBounds(routeLayer.getBounds());
-}
+💶 Vypočítaná cena: ${calcPrice.toFixed(2)} €<br>
+💵 Cena jazdy: ${ridePrice.toFixed(2)} €<br>
+🏷️ Provízia 25 %: ${commission.toFixed(2)} €<br>
+🧾 DPH 23 % z provízie: ${vat.toFixed(2)} €<br>
+📉 Náklady spolu: ${finalCosts.toFixed(2)} €<br><br>
 
-// Inline Service Worker
-if('serviceWorker' in navigator){
-  const swCode = `
-  self.addEventListener('install', e=>{
-    e.waitUntil(caches.open('taxi-cache').then(cache=>cache.addAll(['./'])));
-  });
-  self.addEventListener('fetch', e=>{
-    e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)));
-  });
-  `;
-  const blob = new Blob([swCode], {type: 'application/javascript'});
-  navigator.serviceWorker.register(URL.createObjectURL(blob));
+<strong class="${cls}">Výsledok: ${(ridePrice-finalCosts).toFixed(2)} €</strong>
+`;
+
+ if(routeLayer) map.removeLayer(routeLayer);
+ routeLayer=L.geoJSON(data.routes[0].geometry).addTo(map);
+ map.fitBounds(routeLayer.getBounds());
 }
 </script>
 </body>
